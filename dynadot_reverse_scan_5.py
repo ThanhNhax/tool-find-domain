@@ -2,11 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-Dynadot reverse scanner (SYNC) - 5 domains per request, CSV only, rotate every 1000
+Dynadot reverse scanner (SYNC) — Hyphen separator REQUIRED
+- 5 domains per request
+- CSV only (domain, available)
+- rotate every 1000 records
 
-Requirements:
-- Python 3.10+
-- No external deps
+IMPORTANT SPEC (your requirement):
+- Counter alphabet is base-36: a-z + 0-9 (NO '-' in alphabet)
+- When rendering the label into a domain name, '-' MUST appear BETWEEN EVERY CHARACTER:
+    raw label len=1:  a        -> a
+    raw label len=2:  ab       -> a-b
+    raw label len=3:  vrx      -> v-r-x
+    raw label len=3:  998      -> 9-9-8
+=> Therefore, domains like "998.eu.com" should NEVER appear for len=3.
+   Correct is "9-9-8.eu.com".
 
 API:
   GET https://api.dynadot.com/restful/v2/domains/bulk_search
@@ -16,25 +25,13 @@ API:
   Query:
     domain_name_list=d1,d2,d3,d4,d5  (comma-separated, no whitespace)
 
-Key features:
-- Base-36 labels over alphabet: a-z0-9
-- Reverse order:
-    len=max -> ... -> len=min
-    within same len: from index BASE^len-1 down to 0
-- Batch size fixed: 5 domains per call
-- Output CSV:
-    domain,available
-  (available kept as raw string from API: "Yes"/"No"/others)
-- Rotate output files every N records (default 1000)
-- Reads DYNADOT_API_KEY from .env (default .env)
-- Supports starting from a label in reverse order: --start-label
-    - start-mode=include: start at that label
-    - start-mode=after  : start at the previous label (reverse progression)
-- Optional --insecure to disable SSL verification (debug only)
+Notes:
+- --min-len/--max-len are RAW label length (excluding hyphens)
+- --start-label can be provided as raw (e.g., 998) or rendered (e.g., 9-9-8); script strips hyphens
 
 Examples:
-  python dynadot_reverse_scan_5.py --tld uk.com --min-len 1 --max-len 3 --limit 2000
-  python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 3 --start-label cqg --start-mode include --limit 100
+  python dynadot_reverse_scan_5.py --tld eu.com --min-len 3 --max-len 3 --limit 2000 --out-dir ./out_dynadot --insecure
+  python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 3 --start-label v-r-x --start-mode include --limit 200
 """
 
 from __future__ import annotations
@@ -55,12 +52,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+# Base-36 alphabet (counter alphabet) — NO hyphen here
 ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 ALPHABET_INDEX = {ch: i for i, ch in enumerate(ALPHABET)}
-BASE = len(ALPHABET)
+BASE = len(ALPHABET)  # 36
 
+SEP = "-"  # REQUIRED separator between every character when rendering
 API_URL = "https://api.dynadot.com/restful/v2/domains/bulk_search"
-
 BATCH_SIZE_FIXED = 5
 
 
@@ -88,20 +86,48 @@ def load_env_file(path: Path) -> None:
 
 
 # -------------------------
-# Base-36 helpers
+# Label helpers (base-36), hyphen separator mode
 # -------------------------
-def validate_label(label: str) -> None:
-    if not label:
-        raise ValueError("label is empty")
-    for ch in label:
+def normalize_label_input(label: str) -> str:
+    """
+    Accept start-label in either form:
+      - raw:      998
+      - rendered: 9-9-8
+      - rendered: v-r-x
+    Strip '-' and validate remaining chars are in a-z0-9.
+    """
+    s = (label or "").strip().lower()
+    if not s:
+        return ""
+
+    out_chars: List[str] = []
+    for ch in s:
+        if ch == SEP:
+            continue
         if ch not in ALPHABET_INDEX:
-            raise ValueError(f"Invalid label '{label}': '{ch}' not in a-z0-9")
+            raise ValueError(
+                f"Invalid start-label '{label}': '{ch}' not in a-z0-9 or '-'"
+            )
+        out_chars.append(ch)
+
+    if not out_chars:
+        raise ValueError(f"Invalid start-label '{label}': empty after stripping '-'")
+
+    return "".join(out_chars)
 
 
-def label_to_index(label: str) -> int:
-    validate_label(label)
+def validate_raw_label(raw_label: str) -> None:
+    if not raw_label:
+        raise ValueError("label is empty")
+    for ch in raw_label:
+        if ch not in ALPHABET_INDEX:
+            raise ValueError(f"Invalid label '{raw_label}': '{ch}' not in a-z0-9")
+
+
+def label_to_index(raw_label: str) -> int:
+    validate_raw_label(raw_label)
     x = 0
-    for ch in label:
+    for ch in raw_label:
         x = x * BASE + ALPHABET_INDEX[ch]
     return x
 
@@ -120,6 +146,18 @@ def index_to_label(index: int, length: int) -> str:
     return "".join(chars)
 
 
+def render_label(raw_label: str) -> str:
+    """
+    REQUIRED separator between every character:
+      '998' -> '9-9-8'
+      'a'   -> 'a'
+      'ab'  -> 'a-b'
+    """
+    if len(raw_label) <= 1:
+        return raw_label
+    return SEP.join(raw_label)
+
+
 def iter_labels_reverse(
     min_len: int,
     max_len: int,
@@ -127,30 +165,32 @@ def iter_labels_reverse(
     start_mode: str,
 ) -> Iterator[str]:
     """
-    Reverse iteration:
+    Reverse iteration over RAW labels (no hyphens):
       length: max_len down to min_len
       index: BASE^length - 1 down to 0
 
-    start_label semantics in reverse:
-    - include: start at start_label (must be within [min_len,max_len])
-    - after  : start at label "before it" in reverse order => index(start_label)-1
-              (because reverse goes downward)
+    start_label semantics in reverse (after normalization):
+    - include: start at start_label
+    - after  : start at index(start_label)-1
     """
     if min_len < 1 or max_len < min_len:
         raise ValueError("invalid min_len/max_len")
 
     start_len: Optional[int] = None
     start_idx: Optional[int] = None
+
     if start_label:
-        validate_label(start_label)
-        start_len = len(start_label)
+        raw_start = normalize_label_input(start_label)
+        validate_raw_label(raw_start)
+        start_len = len(raw_start)
         if start_len < min_len or start_len > max_len:
-            raise ValueError("--start-label length out of scope")
-        start_idx = label_to_index(start_label)
+            raise ValueError(
+                "--start-label length out of scope (RAW length excluding '-')"
+            )
+        start_idx = label_to_index(raw_start)
         if start_mode not in ("include", "after"):
             raise ValueError("start_mode must be include|after")
         if start_mode == "after":
-            # reverse goes down; "after" means next in reverse => idx-1
             start_idx -= 1
 
     for length in range(max_len, min_len - 1, -1):
@@ -160,25 +200,26 @@ def iter_labels_reverse(
         if start_label is None:
             begin = last
         elif length > (start_len or 0):
-            # lengths bigger than start_len happen earlier in reverse order; skip them
             continue
         elif length == start_len:
-            # start at start_idx (clamped)
             idx = start_idx if start_idx is not None else last
             if idx > last:
                 idx = last
             begin = idx
         else:
-            # smaller lengths come later; start from last
             begin = last
 
         for idx in range(begin, -1, -1):
             yield index_to_label(idx, length)
 
 
-def iter_domains(labels: Iterator[str], tld: str) -> Iterator[str]:
-    for lab in labels:
-        yield f"{lab}.{tld}"
+def iter_domains(raw_labels: Iterator[str], tld: str) -> Iterator[str]:
+    """
+    Convert RAW label -> rendered label with '-' separators, then attach tld.
+    """
+    tld = (tld or "").strip().lstrip(".")
+    for raw in raw_labels:
+        yield f"{render_label(raw)}.{tld}"
 
 
 # -------------------------
@@ -208,7 +249,6 @@ class RotatingCSV:
 
         self.part = 1
         self.count_in_part = 0
-        self.total = 0
 
         self._f = None
         self._w = None
@@ -243,7 +283,6 @@ class RotatingCSV:
         assert self._w is not None and self._f is not None
         self._w.writerow({"domain": r.domain, "available": r.available})
         self.count_in_part += 1
-        self.total += 1
 
     def flush(self) -> None:
         try:
@@ -261,7 +300,6 @@ class RotatingCSV:
 # Dynadot call + parse
 # -------------------------
 def build_url(domains: List[str]) -> str:
-    # domain_name_list is one comma-separated string
     q = ",".join(domains)
     return f"{API_URL}?{urllib.parse.urlencode({'domain_name_list': q})}"
 
@@ -272,7 +310,7 @@ def http_get_json(
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}",
-        "User-Agent": "dynadot-reverse-scan/1.0",
+        "User-Agent": "dynadot-reverse-scan-sep/1.0",
     }
     req = urllib.request.Request(url, headers=headers, method="GET")
     ctx = ssl._create_unverified_context() if insecure else None
@@ -300,6 +338,8 @@ def http_get_json(
 def parse_domain_result_list(payload: Dict[str, Any]) -> Dict[str, str]:
     """
     Returns mapping: domain_lower -> available_string (raw)
+    Expected:
+      payload["data"]["domain_result_list"] = [{"domain_name": "...", "available": "Yes/No"}, ...]
     """
     out: Dict[str, str] = {}
     if not isinstance(payload, dict):
@@ -310,6 +350,7 @@ def parse_domain_result_list(payload: Dict[str, Any]) -> Dict[str, str]:
     lst = data.get("domain_result_list")
     if not isinstance(lst, list):
         return out
+
     for item in lst:
         if not isinstance(item, dict):
             continue
@@ -328,9 +369,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser("dynadot_reverse_scan_5.py")
 
     ap.add_argument("--tld", default="uk.com")
-    ap.add_argument("--min-len", type=int, default=1)
-    ap.add_argument("--max-len", type=int, default=3)
-    ap.add_argument("--start-label", default=None)
+    ap.add_argument("--min-len", type=int, default=1, help="RAW label length (excluding '-')")
+    ap.add_argument("--max-len", type=int, default=3, help="RAW label length (excluding '-')")
+    ap.add_argument("--start-label", default=None, help="RAW '998' or rendered '9-9-8'")
     ap.add_argument("--start-mode", choices=["include", "after"], default="include")
 
     ap.add_argument("--out-dir", default="./out_dynadot")
@@ -341,32 +382,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--timeout-s", type=float, default=20.0)
     ap.add_argument("--sleep", type=float, default=0.2)
     ap.add_argument("--max-attempts", type=int, default=3)
-    ap.add_argument("--limit", type=int, default=0, help="0 = no limit")
+    ap.add_argument("--limit", type=int, default=0, help="0 = no limit (records written)")
 
-    ap.add_argument(
-        "--insecure", action="store_true", help="Disable SSL verification (debug only)"
-    )
+    ap.add_argument("--insecure", action="store_true", help="Disable SSL verification (debug only)")
 
     args = ap.parse_args(argv)
 
     load_env_file(Path(args.env_file))
     api_key = os.environ.get("DYNADOT_API_KEY", "").strip()
     if not api_key:
-        print(
-            "ERROR: Missing DYNADOT_API_KEY. Put it in .env or export env var.",
-            file=sys.stderr,
-        )
+        print("ERROR: Missing DYNADOT_API_KEY. Put it in .env or export env var.", file=sys.stderr)
         return 2
 
     run_id = args.run_id.strip() or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    writer = RotatingCSV(
-        Path(args.out_dir), rotate_every=args.rotate_every, run_id=run_id
-    )
+    writer = RotatingCSV(Path(args.out_dir), rotate_every=args.rotate_every, run_id=run_id)
 
-    labels = iter_labels_reverse(
-        args.min_len, args.max_len, args.start_label, args.start_mode
-    )
-    domains_iter = iter_domains(labels, args.tld)
+    raw_labels = iter_labels_reverse(args.min_len, args.max_len, args.start_label, args.start_mode)
+    domains_iter = iter_domains(raw_labels, args.tld)
 
     produced = 0
     batch: List[str] = []
@@ -427,9 +459,9 @@ def process_batch(
 ) -> int:
     url = build_url(batch)
 
-    last_err: Optional[str] = None
     status: Optional[int] = None
     payload: Optional[Dict[str, Any]] = None
+    last_err: Optional[str] = None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -445,61 +477,55 @@ def process_batch(
             break
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
+            payload = None
             if attempt < max_attempts:
                 time.sleep(0.8 * (2 ** (attempt - 1)) + random.uniform(0, 0.2))
                 continue
 
-    # If failed completely: write empty available values (or "ERROR")
     if payload is None:
+        # No available value returned -> write empty string
         for d in batch:
-            writer.write_one(
-                Row(domain=d, available=f"ERROR:{last_err or 'request_failed'}")
-            )
+            writer.write_one(Row(domain=d, available=""))
             produced += 1
             if limit and produced >= limit:
                 writer.flush()
-                print(
-                    f"[RUNNING] scanned={produced} last={d} http={status} ERROR",
-                    flush=True,
-                )
+                print(f"[RUNNING] scanned={produced} last={d} http={status} ERROR={last_err}", flush=True)
                 return produced
-
         writer.flush()
-        # ✅ progress log for failed batch (still show script alive)
-        last_d = batch[-1] if batch else ""
-        print(
-            f"[RUNNING] scanned={produced} last={last_d} http={status} batch=FAIL",
-            flush=True,
-        )
+        print(f"[RUNNING] scanned={produced} last={batch[-1]} http={status} batch=FAIL ERROR={last_err}", flush=True)
         return produced
 
     m = parse_domain_result_list(payload)
 
-    batch_last_domain = batch[-1] if batch else ""
+    missing = 0
+    batch_last_domain = batch[-1]
     batch_last_av = ""
 
-    # Write rows; keep exact available string from API. If missing => empty string.
     for d in batch:
-        av = m.get(d.lower(), "")
-        batch_last_av = av  # keep last for summary log
+        av = m.get(d.lower())
+        if av is None:
+            av = ""   # missing result -> empty
+            missing += 1
+        batch_last_av = av
         writer.write_one(Row(domain=d, available=av))
         produced += 1
 
         if limit and produced >= limit:
             writer.flush()
-            print(
-                f"[RUNNING] scanned={produced} last={d} avail={av} http={status}",
-                flush=True,
-            )
+            print(f"[RUNNING] scanned={produced} last={d} avail={av} http={status}", flush=True)
             return produced
 
     writer.flush()
-
-    # ✅ progress log per batch (5 domains)
-    print(
-        f"[RUNNING] scanned={produced} last={batch_last_domain} avail={batch_last_av} http={status} batch={len(batch)}",
-        flush=True,
-    )
+    if missing:
+        print(
+            f"[RUNNING] scanned={produced} last={batch_last_domain} avail={batch_last_av} http={status} batch={len(batch)} missing={missing}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[RUNNING] scanned={produced} last={batch_last_domain} avail={batch_last_av} http={status} batch={len(batch)}",
+            flush=True,
+        )
 
     return produced
 
