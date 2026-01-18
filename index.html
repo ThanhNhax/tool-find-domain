@@ -1,0 +1,490 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Domains Viewer</title>
+    <style>
+      :root {
+        --bg-1: #0f1b2d;
+        --bg-2: #16243b;
+        --card: #0f1623;
+        --card-2: #141e2f;
+        --ink: #e6eef8;
+        --muted: #9fb2c7;
+        --accent: #37c7a5;
+        --accent-2: #f7b267;
+        --line: #22324a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: 'Space Grotesk', 'Satoshi', 'Noto Sans', sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(
+            1200px 600px at 10% -10%,
+            #2b3b5a 0%,
+            transparent 60%
+          ),
+          radial-gradient(900px 500px at 110% 20%, #1b5a50 0%, transparent 55%),
+          linear-gradient(180deg, var(--bg-1), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      .page {
+        max-width: 1100px;
+        margin: 32px auto 48px;
+        padding: 0 20px 40px;
+      }
+
+      header {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      h1 {
+        font-size: clamp(24px, 3vw, 36px);
+        margin: 0;
+        letter-spacing: 0.3px;
+      }
+
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .panel {
+        background: linear-gradient(180deg, var(--card), var(--card-2));
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px;
+        box-shadow: 0 24px 80px rgba(2, 7, 18, 0.45);
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .toolbar input[type='search'] {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #0b1220;
+        color: var(--ink);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+
+      .toolbar button,
+      .toolbar label {
+        border: 1px solid var(--line);
+        background: #0b1220;
+        color: var(--ink);
+        border-radius: 12px;
+        padding: 9px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        transition:
+          transform 0.15s ease,
+          border-color 0.15s ease;
+      }
+
+      .toolbar button:hover,
+      .toolbar label:hover {
+        transform: translateY(-1px);
+        border-color: var(--accent);
+      }
+
+      .toolbar input[type='file'] {
+        display: none;
+      }
+
+      .status {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 6px 0 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+      }
+
+      th {
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 11px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+      }
+
+      .yes {
+        background: rgba(55, 199, 165, 0.18);
+        color: var(--accent);
+      }
+      .no {
+        background: rgba(247, 178, 103, 0.18);
+        color: var(--accent-2);
+      }
+
+      .pager {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 14px;
+      }
+
+      .pager button {
+        border: 1px solid var(--line);
+        background: #0b1220;
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .pager button[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .empty {
+        padding: 24px 0 6px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .row-anim {
+        animation: fadeUp 0.3s ease both;
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+        th:nth-child(1),
+        td:nth-child(1) {
+          width: 48px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <h1>Dynadot Domains Viewer</h1>
+        <div class="sub">
+          Search, filter, and paginate the CSV domain list (page size 100).
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search domain..." />
+          <button id="load-auto" type="button">Load from out_dynadot</button>
+          <!-- <label>
+          Load folder
+          <input id="folder" type="file" webkitdirectory directory multiple />
+        </label> -->
+        </div>
+        <div id="status" class="status">Waiting for data.</div>
+
+        <div id="table-wrap"></div>
+
+        <div class="pager">
+          <div id="page-info" class="status"></div>
+          <div>
+            <button id="prev" type="button">Prev</button>
+            <button id="next" type="button">Next</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const DATA_FILES = [
+        'results_20260116_224630_000001.csv',
+        'results_20260116_224630_000002.csv',
+        'results_20260116_224630_000003.csv',
+        'results_20260116_224630_000004.csv',
+        'results_20260116_224630_000005.csv',
+        'results_20260116_224630_000006.csv',
+        'results_20260116_224630_000007.csv',
+        'results_20260116_224630_000008.csv',
+        'results_20260116_224630_000009.csv',
+        'results_20260116_224630_000010.csv',
+        'results_20260116_224630_000011.csv',
+        'results_20260116_224630_000012.csv',
+        'results_20260116_224630_000013.csv',
+        'results_20260116_224630_000014.csv',
+        'results_20260116_224630_000015.csv',
+        'results_20260116_224630_000016.csv',
+        'results_20260116_224630_000017.csv',
+        'results_20260116_224630_000018.csv',
+        'results_20260116_224630_000019.csv',
+        'results_20260116_224630_000020.csv',
+        'results_20260116_224630_000021.csv',
+        'results_20260116_224630_000022.csv',
+        'results_20260116_224630_000023.csv',
+        'results_20260116_224630_000024.csv',
+        'results_20260116_224630_000025.csv',
+        'results_20260116_224630_000026.csv',
+        'results_20260116_224630_000027.csv',
+        'results_20260116_224630_000028.csv',
+        'results_20260116_224630_000029.csv',
+        'results_20260116_224630_000030.csv',
+        'results_20260116_224630_000031.csv',
+        'results_20260116_224630_000032.csv',
+        'results_20260116_224630_000033.csv',
+        'results_20260116_224630_000034.csv',
+        'results_20260116_224630_000035.csv',
+        'results_20260116_224630_000036.csv',
+        'results_20260116_224630_000037.csv',
+        'results_20260116_224630_000038.csv',
+        'results_20260116_224630_000039.csv',
+        'results_20260116_224630_000040.csv',
+        'results_20260116_224630_000041.csv',
+        'results_20260116_224630_000042.csv',
+        'results_20260117_074309_000001.csv',
+        'results_20260117_074309_000002.csv',
+        'results_20260117_074309_000003.csv',
+        'results_20260117_074309_000004.csv',
+        'results_20260117_074309_000005.csv',
+        'results_20260117_074309_000006.csv',
+        'results_20260117_074309_000007.csv',
+      ];
+
+      const PAGE_SIZE = 100;
+      const state = {
+        rows: [],
+        filtered: [],
+        page: 1,
+        query: '',
+      };
+
+      const statusEl = document.getElementById('status');
+      const searchEl = document.getElementById('search');
+      const tableWrap = document.getElementById('table-wrap');
+      const pageInfo = document.getElementById('page-info');
+      const prevBtn = document.getElementById('prev');
+      const nextBtn = document.getElementById('next');
+      const loadAutoBtn = document.getElementById('load-auto');
+      const folderInput = document.getElementById('folder');
+
+      function truthy(value) {
+        const s = String(value || '')
+          .trim()
+          .toLowerCase();
+        return s === 'true' || s === '1' || s === 'yes' || s === 'available';
+      }
+
+      function parseCsv(text) {
+        const lines = text.split(/\r?\n/).filter(Boolean);
+        if (lines.length <= 1) return [];
+        const rows = [];
+        for (let i = 1; i < lines.length; i += 1) {
+          const parts = lines[i].split(',');
+          const domain = (parts[0] || '').trim();
+          if (!domain) continue;
+          const available = truthy(parts[1]);
+          rows.push({ domain, available });
+        }
+        return rows;
+      }
+
+      function mergeRows(rows) {
+        const map = new Map();
+        rows.forEach((row) => {
+          if (!map.has(row.domain)) {
+            map.set(row.domain, row.available);
+            return;
+          }
+          if (row.available) {
+            map.set(row.domain, true);
+          }
+        });
+
+        return Array.from(map.entries())
+          .map(([domain, available]) => ({ domain, available }))
+          .sort((a, b) => a.domain.localeCompare(b.domain));
+      }
+
+      function applySearch() {
+        const q = state.query.trim().toLowerCase();
+        if (!q) {
+          state.filtered = [...state.rows];
+        } else {
+          state.filtered = state.rows.filter((row) =>
+            row.domain.toLowerCase().includes(q),
+          );
+        }
+        state.page = 1;
+        render();
+      }
+
+      function paginateRows() {
+        const start = (state.page - 1) * PAGE_SIZE;
+        return state.filtered.slice(start, start + PAGE_SIZE);
+      }
+
+      function renderTable(rows) {
+        if (!rows.length) {
+          tableWrap.innerHTML = '<div class="empty">No results.</div>';
+          return;
+        }
+
+        const bodyRows = rows
+          .map((row, idx) => {
+            const number = (state.page - 1) * PAGE_SIZE + idx + 1;
+            const badgeClass = row.available ? 'yes' : 'no';
+            const badgeText = row.available ? 'Yes' : 'No';
+            return `
+          <tr class="row-anim">
+            <td>${number}</td>
+            <td>${row.domain}</td>
+            <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+          </tr>
+        `;
+          })
+          .join('');
+
+        tableWrap.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Domain</th>
+              <th>Available</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${bodyRows}
+          </tbody>
+        </table>
+      `;
+      }
+
+      function render() {
+        const total = state.filtered.length;
+        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        if (state.page > totalPages) state.page = totalPages;
+
+        const pageRows = paginateRows();
+        renderTable(pageRows);
+
+        pageInfo.textContent = `Total: ${total} domains | Page ${state.page} of ${totalPages}`;
+        prevBtn.disabled = state.page <= 1;
+        nextBtn.disabled = state.page >= totalPages;
+      }
+
+      async function loadFromFetch() {
+        statusEl.textContent = 'Loading CSV files from out_dynadot...';
+        try {
+          const texts = await Promise.all(
+            DATA_FILES.map((name) =>
+              fetch(`out_dynadot/${name}`).then((res) => {
+                if (!res.ok) throw new Error(`Failed to load ${name}`);
+                return res.text();
+              }),
+            ),
+          );
+
+          const allRows = texts.flatMap(parseCsv);
+          state.rows = mergeRows(allRows);
+          state.filtered = [...state.rows];
+          statusEl.textContent = `Loaded ${state.rows.length} unique domains.`;
+          render();
+        } catch (err) {
+          statusEl.textContent =
+            "Auto-load failed. Use 'Load folder' or run a local server.";
+        }
+      }
+
+      async function loadFromFiles(files) {
+        const csvFiles = Array.from(files).filter((file) =>
+          file.name.toLowerCase().endsWith('.csv'),
+        );
+        if (!csvFiles.length) {
+          statusEl.textContent = 'No CSV files selected.';
+          return;
+        }
+
+        statusEl.textContent = `Loading ${csvFiles.length} CSV files...`;
+        const texts = await Promise.all(csvFiles.map((file) => file.text()));
+        const allRows = texts.flatMap(parseCsv);
+        state.rows = mergeRows(allRows);
+        state.filtered = [...state.rows];
+        statusEl.textContent = `Loaded ${state.rows.length} unique domains.`;
+        render();
+      }
+
+      searchEl.addEventListener('input', (event) => {
+        state.query = event.target.value || '';
+        applySearch();
+      });
+
+      prevBtn.addEventListener('click', () => {
+        state.page = Math.max(1, state.page - 1);
+        render();
+      });
+
+      nextBtn.addEventListener('click', () => {
+        state.page += 1;
+        render();
+      });
+
+      loadAutoBtn.addEventListener('click', () => {
+        loadFromFetch();
+      });
+
+      folderInput.addEventListener('change', (event) => {
+        loadFromFiles(event.target.files || []);
+      });
+
+      if (location.protocol.startsWith('http')) {
+        loadFromFetch();
+      }
+    </script>
+  </body>
+</html>
