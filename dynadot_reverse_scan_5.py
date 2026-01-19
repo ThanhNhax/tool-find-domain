@@ -297,6 +297,15 @@ class RotatingCSV:
         self._close_part()
 
 
+def write_manifest(out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = sorted([p.name for p in out_dir.glob("*.csv") if p.is_file()])
+    manifest = {"generated_at": dt.datetime.now().isoformat(), "files": files}
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8"
+    )
+
+
 # -------------------------
 # Dynadot call + parse
 # -------------------------
@@ -451,6 +460,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     finally:
         writer.close()
+        try:
+            write_manifest(Path(args.out_dir))
+        except Exception:
+            pass
 
 
 def process_batch(
