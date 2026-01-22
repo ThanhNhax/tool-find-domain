@@ -9,13 +9,11 @@ Dynadot reverse scanner (SYNC) — Hyphen separator optional
 
 IMPORTANT SPEC (your requirement):
 - Counter alphabet is base-36: a-z + 0-9 (NO '-' in alphabet)
-- Default render inserts '-' BETWEEN EVERY CHARACTER (use --no-sep to disable):
+- Default render has NO separator between characters (use --sep to enable):
     raw label len=1:  a        -> a
-    raw label len=2:  ab       -> a-b
-    raw label len=3:  vrx      -> v-r-x
-    raw label len=3:  998      -> 9-9-8
-=> Therefore, domains like "998.eu.com" should NEVER appear for len=3.
-   Correct is "9-9-8.eu.com". (Unless you pass --no-sep)
+    raw label len=2:  ab       -> ab
+    raw label len=3:  vrx      -> vrx
+    raw label len=3:  998      -> 998
 
 API:
   GET https://api.dynadot.com/restful/v2/domains/bulk_search
@@ -31,8 +29,8 @@ Notes:
 
 Examples:
   python dynadot_reverse_scan_5.py --tld eu.com --min-len 3 --max-len 3 --limit 2000 --out-dir ./out_dynadot --insecure
-  python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 3 --start-label v-r-x --start-mode include --limit 200
-  python dynadot_reverse_scan_5.py --tld uk.com --min-len 2 --max-len 3 --no-sep
+  python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 3 --start-label v-r-x --start-mode include --limit 200 --sep
+  python dynadot_reverse_scan_5.py --tld uk.com --min-len 2 --max-len 3
 """
 
 from __future__ import annotations
@@ -58,7 +56,7 @@ ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 ALPHABET_INDEX = {ch: i for i, ch in enumerate(ALPHABET)}
 BASE = len(ALPHABET)  # 36
 
-SEP = "-"  # Separator between every character when rendering (set to "" with --no-sep)
+SEP = ""  # Separator between every character when rendering (set to "-" with --sep)
 API_URL = "https://api.dynadot.com/restful/v2/domains/bulk_search"
 BATCH_SIZE_FIXED = 5
 
@@ -149,10 +147,10 @@ def index_to_label(index: int, length: int) -> str:
 
 def render_label(raw_label: str) -> str:
     """
-    Default: separator between every character (unless SEP == ""):
-      '998' -> '9-9-8'
+    Default: no separator (unless SEP == "-"):
+      '998' -> '998'
       'a'   -> 'a'
-      'ab'  -> 'a-b'
+      'ab'  -> 'ab'
     """
     if SEP == "" or len(raw_label) <= 1:
         return raw_label
@@ -216,7 +214,7 @@ def iter_labels_reverse(
 
 def iter_domains(raw_labels: Iterator[str], tld: str) -> Iterator[str]:
     """
-    Convert RAW label -> rendered label (with separator, or raw if --no-sep), then attach tld.
+    Convert RAW label -> rendered label (with separator if --sep), then attach tld.
     """
     tld = (tld or "").strip().lstrip(".")
     for raw in raw_labels:
@@ -383,7 +381,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-len", type=int, default=3, help="RAW label length (excluding '-')")
     ap.add_argument("--start-label", default=None, help="RAW '998' or rendered '9-9-8'")
     ap.add_argument("--start-mode", choices=["include", "after"], default="include")
-    ap.add_argument("--no-sep", action="store_true", help="Disable '-' separator (render raw labels)")
+    ap.add_argument("--sep", action="store_true", help="Enable '-' separator between every character")
 
     ap.add_argument("--out-dir", default="./out_dynadot")
     ap.add_argument("--rotate-every", type=int, default=1000)
@@ -400,8 +398,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     global SEP
-    if args.no_sep:
-        SEP = ""
+    if args.sep:
+        SEP = "-"
 
     load_env_file(Path(args.env_file))
     api_key = os.environ.get("DYNADOT_API_KEY", "").strip()
