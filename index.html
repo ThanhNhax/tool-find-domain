@@ -71,7 +71,7 @@
 
       .toolbar {
         display: grid;
-        grid-template-columns: 1fr auto auto;
+        grid-template-columns: 1fr auto auto auto;
         gap: 10px;
         align-items: center;
         margin-bottom: 12px;
@@ -109,6 +109,24 @@
 
       .toolbar input[type='file'] {
         display: none;
+      }
+
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--line);
+        background: #0b1220;
+        color: var(--ink);
+        border-radius: 12px;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .toggle input {
+        accent-color: var(--accent);
       }
 
       .status {
@@ -256,6 +274,10 @@
         <div class="toolbar">
           <input id="search" type="search" placeholder="Search domain..." />
           <button id="load-auto" type="button">Load Domain</button>
+          <label class="toggle">
+            <input id="filter-age" type="checkbox" />
+            Is 2 Years
+          </label>
           <!-- <label>
             Load folder
             <input id="folder" type="file" webkitdirectory directory multiple />
@@ -343,6 +365,7 @@
       const prevBtn = document.getElementById('prev');
       const nextBtn = document.getElementById('next');
       const loadAutoBtn = document.getElementById('load-auto');
+      const filterAgeEl = document.getElementById('filter-age');
       const folderInput = document.getElementById('folder');
 
       function truthy(value) {
@@ -361,7 +384,8 @@
           const domain = (parts[0] || '').trim();
           if (!domain) continue;
           const available = truthy(parts[1]);
-          rows.push({ domain, available });
+          const is2Years = truthy(parts[2]);
+          rows.push({ domain, available, is2Years });
         }
         return rows;
       }
@@ -370,16 +394,25 @@
         const map = new Map();
         rows.forEach((row) => {
           if (!map.has(row.domain)) {
-            map.set(row.domain, row.available);
+            map.set(row.domain, {
+              available: row.available,
+              is2Years: row.is2Years,
+            });
             return;
           }
-          if (row.available) {
-            map.set(row.domain, true);
-          }
+          const prev = map.get(row.domain);
+          map.set(row.domain, {
+            available: prev.available || row.available,
+            is2Years: prev.is2Years || row.is2Years,
+          });
         });
 
         return Array.from(map.entries())
-          .map(([domain, available]) => ({ domain, available }))
+          .map(([domain, data]) => ({
+            domain,
+            available: data.available,
+            is2Years: data.is2Years,
+          }))
           .sort((a, b) => a.domain.localeCompare(b.domain));
       }
 
@@ -391,6 +424,7 @@
 
       function applySearch() {
         const q = state.query.trim().toLowerCase();
+          const onlyTwoYears = !!(filterAgeEl && filterAgeEl.checked);
         if (!q) {
           state.filtered = [...state.rows];
         } else {
@@ -400,6 +434,9 @@
             if (domainLower.includes(q)) return true;
             return normalizeDomain(domainLower).includes(qNorm);
           });
+        }
+        if (onlyTwoYears) {
+          state.filtered = state.filtered.filter((row) => row.is2Years);
         }
         state.page = 1;
         render();
@@ -421,11 +458,14 @@
             const number = (state.page - 1) * PAGE_SIZE + idx + 1;
             const badgeClass = row.available ? 'yes' : 'no';
             const badgeText = row.available ? 'Yes' : 'No';
+            const ageClass = row.is2Years ? 'yes' : 'no';
+            const ageText = row.is2Years ? 'Yes' : 'No';
             return `
           <tr class="row-anim">
             <td>${number}</td>
             <td>${row.domain}</td>
             <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+            <td><span class="badge ${ageClass}">${ageText}</span></td>
           </tr>
         `;
           })
@@ -438,6 +478,7 @@
               <th>#</th>
               <th>Domain</th>
               <th>Available</th>
+              <th>Is 2 Years</th>
             </tr>
           </thead>
           <tbody>
@@ -522,6 +563,10 @@
         state.query = event.target.value || '';
         applySearch();
       });
+
+      if (filterAgeEl) {
+        filterAgeEl.addEventListener('change', applySearch);
+      }
 
       prevBtn.addEventListener('click', () => {
         state.page = Math.max(1, state.page - 1);
