@@ -94,4 +94,4 @@ def main(url: str) -> None:
 
 
 if __name__ == "__main__":
-    main("uk.com")
+    main("4v9.mex.com")
