@@ -3,6 +3,7 @@
 Tool CLI dùng để **scan availability domain qua Dynadot REST v2 (bulk_search)** theo cơ chế **base-36 nhưng chạy NGƯỢC**.
 
 Mục tiêu chính:
+
 - Scan nhanh phần **cuối của không gian domain** (ví dụ: `zzz → aaa`)
 - Mỗi lần gọi API **5 domain** (an toàn, đúng tier `regular`)
 - Ghi output gọn: `domain` + giá trị `available` (`Yes` / `No`)
@@ -86,13 +87,13 @@ python dynadot_reverse_scan_5.py \
 
 ### Giải thích nhanh
 
-| Flag | Ý nghĩa |
-|----|----|
-| `--tld` | TLD cần scan (vd: `eu.com`) |
-| `--min-len` | Độ dài label tối thiểu |
-| `--max-len` | Độ dài label tối đa |
-| `--limit` | Tổng domain scan (0 = không giới hạn) |
-| `--out-dir` | Thư mục output |
+| Flag         | Ý nghĩa                                    |
+| ------------ | ------------------------------------------ |
+| `--tld`      | TLD cần scan (vd: `eu.com`)                |
+| `--min-len`  | Độ dài label tối thiểu                     |
+| `--max-len`  | Độ dài label tối đa                        |
+| `--limit`    | Tổng domain scan (0 = không giới hạn)      |
+| `--out-dir`  | Thư mục output                             |
 | `--insecure` | Tắt SSL verify (fix lỗi cert trên Windows) |
 
 ---
@@ -107,6 +108,7 @@ Tool sẽ log để báo **script đang chạy**:
 ```
 
 Nếu không thấy log:
+
 - Kiểm tra `--limit`
 - Kiểm tra API key
 - Kiểm tra network / SSL
@@ -122,6 +124,7 @@ Missing DYNADOT_API_KEY
 ```
 
 ➡️ Kiểm tra:
+
 - File `.env` có đúng tên không
 - Có chạy lệnh trong đúng folder không
 
@@ -162,3 +165,5 @@ python -c "import os; print(os.getenv('DYNADOT_API_KEY'))"
 Internal / Private use.
 
 add IP dynadot
+
+python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 6 --out-dir ./out_dynadot
