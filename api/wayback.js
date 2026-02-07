@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method Not Allowed' });
     return;
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(502).json({ error: 'Wayback fetch failed', detail: String(err) });
   }
-}
+};
 
 function httpGet(url, headers) {
   return new Promise((resolve, reject) => {
@@ -48,6 +48,7 @@ function httpGet(url, headers) {
       {
         method: 'GET',
         headers,
+        timeout: 15000,
       },
       (res) => {
         let data = '';
@@ -60,6 +61,9 @@ function httpGet(url, headers) {
       },
     );
     req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error('Upstream timeout'));
+    });
     req.end();
   });
 }
