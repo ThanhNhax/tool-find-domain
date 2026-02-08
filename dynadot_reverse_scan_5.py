@@ -5,6 +5,7 @@
 Dynadot reverse scanner (SYNC)
 - 5 domains per request
 - CSV only (domain, available)
+- Wayback check per domain -> is_2_years column
 - rotate every 1000 records
 
 IMPORTANT SPEC (your requirement):
@@ -31,6 +32,7 @@ Examples:
   python dynadot_reverse_scan_5.py --tld eu.com --min-len 3 --max-len 6 --limit 2000 --out-dir ./out_dynadot --insecure
   python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 6 --start-label vrx --start-mode include --limit 200
   python dynadot_reverse_scan_5.py --tld uk.com --min-len 3 --max-len 6
+  python dynadot_reverse_scan_5.py --tld uk.com --no-wayback
 """
 
 from __future__ import annotations
@@ -58,6 +60,9 @@ BASE = len(ALPHABET)  # 36
 
 API_URL = "https://api.dynadot.com/restful/v2/domains/bulk_search"
 BATCH_SIZE_FIXED = 5
+WAYBACK_DEFAULT_URL = (
+    "https://web.archive.org/__wb/sparkline?output=json&url={domain}&collection=web"
+)
 
 # -------------------------
 # .env loader (no deps)
@@ -220,6 +225,7 @@ def iter_domains(raw_labels: Iterator[str], tld: str) -> Iterator[str]:
 class Row:
     domain: str
     available: str
+    is_2_years: str
 
 
 class RotatingCSV:
@@ -262,7 +268,7 @@ class RotatingCSV:
         path = self._path(self.part)
         self._f = path.open("a", encoding="utf-8", newline="")
         self._w = csv.DictWriter(
-            self._f, fieldnames=["domain", "available"]
+            self._f, fieldnames=["domain", "available", "is_2_years"]
         )
         if path.stat().st_size == 0:
             self._w.writeheader()
@@ -275,7 +281,11 @@ class RotatingCSV:
             self._open_part()
         assert self._w is not None and self._f is not None
         self._w.writerow(
-            {"domain": r.domain, "available": r.available}
+            {
+                "domain": r.domain,
+                "available": r.available,
+                "is_2_years": r.is_2_years,
+            }
         )
         self.count_in_part += 1
 
@@ -367,6 +377,109 @@ def parse_domain_result_list(payload: Dict[str, Any]) -> Dict[str, str]:
 
 
 # -------------------------
+# Wayback (is_2_years)
+# -------------------------
+def build_wayback_url(domain: str, template: str) -> str:
+    if "{domain}" in template:
+        return template.format(domain=urllib.parse.quote(domain, safe=""))
+    # If user passes a base URL, append ?domain=
+    if "?" in template:
+        return f"{template}&domain={urllib.parse.quote(domain, safe='')}"
+    return f"{template}?domain={urllib.parse.quote(domain, safe='')}"
+
+
+def _parse_wayback_ts(value: Any) -> Optional[dt.datetime]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        s = str(int(value))
+    else:
+        s = str(value).strip()
+    if not s or not s.isdigit():
+        return None
+    # Accept YYYY, YYYYMM, YYYYMMDD, YYYYMMDDhhmmss
+    try:
+        if len(s) >= 14:
+            return dt.datetime.strptime(s[:14], "%Y%m%d%H%M%S")
+        if len(s) >= 8:
+            return dt.datetime.strptime(s[:8], "%Y%m%d")
+        if len(s) >= 6:
+            return dt.datetime.strptime(s[:6], "%Y%m")
+        if len(s) >= 4:
+            return dt.datetime.strptime(s[:4], "%Y")
+    except Exception:
+        return None
+    return None
+
+
+def _first_seen_from_sparkline(obj: Dict[str, Any]) -> Optional[dt.datetime]:
+    if not isinstance(obj, dict):
+        return None
+
+    ts = _parse_wayback_ts(obj.get("first_ts"))
+    if ts:
+        return ts
+
+    years = obj.get("years")
+    counts = obj.get("counts")
+    if isinstance(years, list) and isinstance(counts, list) and len(years) == len(counts):
+        for y, c in zip(years, counts):
+            try:
+                if int(c) > 0:
+                    return _parse_wayback_ts(y)
+            except Exception:
+                continue
+
+    return None
+
+
+def wayback_is_2_years(
+    domain: str,
+    url_template: str,
+    timeout_s: float,
+    insecure: bool,
+) -> str:
+    url = build_wayback_url(domain, url_template)
+    headers = {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "referer": f"https://web.archive.org/web/20260000000000*/{domain}",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/144.0.0.0 Safari/537.36"
+        ),
+    }
+    cookie = os.environ.get("WAYBACK_COOKIE", "").strip()
+    if cookie:
+        headers["cookie"] = cookie
+
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    ctx = ssl._create_unverified_context() if insecure else None
+
+    try:
+        if ctx is not None:
+            with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as r:
+                text = r.read().decode("utf-8", errors="replace")
+        else:
+            with urllib.request.urlopen(req, timeout=timeout_s) as r:
+                text = r.read().decode("utf-8", errors="replace")
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return ""
+
+    first_seen = _first_seen_from_sparkline(payload)
+    if not first_seen:
+        return "No"
+
+    now = dt.datetime.utcnow()
+    age_days = (now - first_seen).days
+    return "Yes" if age_days >= 730 else "No"
+
+
+# -------------------------
 # Main loop
 # -------------------------
 def main(argv: Optional[List[str]] = None) -> int:
@@ -388,6 +501,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="0 = no limit (records written)")
 
     ap.add_argument("--insecure", action="store_true", help="Disable SSL verification (debug only)")
+    ap.add_argument("--no-wayback", action="store_true", help="Disable Wayback check for is_2_years")
+    ap.add_argument("--wayback-url", default=WAYBACK_DEFAULT_URL)
+    ap.add_argument("--wayback-timeout-s", type=float, default=15.0)
+    ap.add_argument("--wayback-sleep", type=float, default=0.0)
     args = ap.parse_args(argv)
 
     load_env_file(Path(args.env_file))
@@ -404,6 +521,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     produced = 0
     batch: List[str] = []
+    wayback_cache: Dict[str, str] = {}
+    use_wayback = not args.no_wayback
+
     try:
         for domain in domains_iter:
             batch.append(domain)
@@ -419,6 +539,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_attempts=args.max_attempts,
                 produced=produced,
                 limit=args.limit,
+                use_wayback=use_wayback,
+                wayback_url=args.wayback_url,
+                wayback_timeout_s=args.wayback_timeout_s,
+                wayback_sleep=args.wayback_sleep,
+                wayback_cache=wayback_cache,
             )
             batch = []
 
@@ -440,6 +565,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_attempts=args.max_attempts,
                 produced=produced,
                 limit=args.limit,
+                use_wayback=use_wayback,
+                wayback_url=args.wayback_url,
+                wayback_timeout_s=args.wayback_timeout_s,
+                wayback_sleep=args.wayback_sleep,
+                wayback_cache=wayback_cache,
             )
 
         writer.flush()
@@ -461,6 +591,11 @@ def process_batch(
     max_attempts: int,
     produced: int,
     limit: int,
+    use_wayback: bool,
+    wayback_url: str,
+    wayback_timeout_s: float,
+    wayback_sleep: float,
+    wayback_cache: Dict[str, str],
 ) -> int:
     url = build_url(batch)
 
@@ -490,7 +625,19 @@ def process_batch(
     if payload is None:
         # No available value returned -> write empty string
         for d in batch:
-            writer.write_one(Row(domain=d, available=""))
+            is_2_years = ""
+            if use_wayback:
+                key = d.lower()
+                if key in wayback_cache:
+                    is_2_years = wayback_cache[key]
+                else:
+                    is_2_years = wayback_is_2_years(
+                        d, wayback_url, wayback_timeout_s, insecure
+                    )
+                    wayback_cache[key] = is_2_years
+                    if wayback_sleep > 0:
+                        time.sleep(wayback_sleep)
+            writer.write_one(Row(domain=d, available="", is_2_years=is_2_years))
             produced += 1
             if limit and produced >= limit:
                 writer.flush()
@@ -512,7 +659,19 @@ def process_batch(
             av = ""   # missing result -> empty
             missing += 1
         batch_last_av = av
-        writer.write_one(Row(domain=d, available=av))
+        is_2_years = ""
+        if use_wayback:
+            key = d.lower()
+            if key in wayback_cache:
+                is_2_years = wayback_cache[key]
+            else:
+                is_2_years = wayback_is_2_years(
+                    d, wayback_url, wayback_timeout_s, insecure
+                )
+                wayback_cache[key] = is_2_years
+                if wayback_sleep > 0:
+                    time.sleep(wayback_sleep)
+        writer.write_one(Row(domain=d, available=av, is_2_years=is_2_years))
         produced += 1
 
         if limit and produced >= limit:
