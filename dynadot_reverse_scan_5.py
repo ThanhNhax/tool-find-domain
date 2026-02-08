@@ -501,6 +501,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="0 = no limit (records written)")
 
     ap.add_argument("--insecure", action="store_true", help="Disable SSL verification (debug only)")
+    ap.add_argument("--debug-dynadot", action="store_true", help="Dump last Dynadot payload to out-dir for debugging")
     ap.add_argument("--no-wayback", action="store_true", help="Disable Wayback check for is_2_years")
     ap.add_argument("--wayback-url", default=WAYBACK_DEFAULT_URL)
     ap.add_argument("--wayback-timeout-s", type=float, default=15.0)
@@ -514,7 +515,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     run_id = args.run_id.strip() or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    writer = RotatingCSV(Path(args.out_dir), rotate_every=args.rotate_every, run_id=run_id)
+    out_dir = Path(args.out_dir)
+    writer = RotatingCSV(out_dir, rotate_every=args.rotate_every, run_id=run_id)
 
     raw_labels = iter_labels_reverse(args.min_len, args.max_len, args.start_label, args.start_mode)
     domains_iter = iter_domains(raw_labels, args.tld)
@@ -539,6 +541,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_attempts=args.max_attempts,
                 produced=produced,
                 limit=args.limit,
+                debug_dynadot=args.debug_dynadot,
+                debug_dir=out_dir,
                 use_wayback=use_wayback,
                 wayback_url=args.wayback_url,
                 wayback_timeout_s=args.wayback_timeout_s,
@@ -565,6 +569,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_attempts=args.max_attempts,
                 produced=produced,
                 limit=args.limit,
+                debug_dynadot=args.debug_dynadot,
+                debug_dir=out_dir,
                 use_wayback=use_wayback,
                 wayback_url=args.wayback_url,
                 wayback_timeout_s=args.wayback_timeout_s,
@@ -591,6 +597,8 @@ def process_batch(
     max_attempts: int,
     produced: int,
     limit: int,
+    debug_dynadot: bool,
+    debug_dir: Path,
     use_wayback: bool,
     wayback_url: str,
     wayback_timeout_s: float,
@@ -624,6 +632,25 @@ def process_batch(
 
     if payload is None:
         # No available value returned -> write empty string
+        if debug_dynadot:
+            try:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                debug_path = debug_dir / "dynadot_last.json"
+                debug_path.write_text(
+                    json.dumps(
+                        {
+                            "status": status,
+                            "error": last_err,
+                            "batch": batch,
+                            "payload": None,
+                        },
+                        ensure_ascii=True,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         for d in batch:
             is_2_years = ""
             if use_wayback:
@@ -648,6 +675,24 @@ def process_batch(
         return produced
 
     m = parse_domain_result_list(payload)
+    if debug_dynadot and not m:
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / "dynadot_last.json"
+            debug_path.write_text(
+                json.dumps(
+                    {
+                        "status": status,
+                        "batch": batch,
+                        "payload": payload,
+                    },
+                    ensure_ascii=True,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     missing = 0
     batch_last_domain = batch[-1]
