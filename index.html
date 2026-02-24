@@ -71,7 +71,7 @@
 
       .toolbar {
         display: grid;
-        grid-template-columns: 1fr auto auto auto;
+        grid-template-columns: 1fr auto auto auto auto;
         gap: 10px;
         align-items: center;
         margin-bottom: 12px;
@@ -173,6 +173,10 @@
       .no {
         background: rgba(247, 178, 103, 0.18);
         color: var(--accent-2);
+      }
+      .unknown {
+        background: rgba(159, 178, 199, 0.18);
+        color: var(--muted);
       }
 
       .check-btn {
@@ -376,6 +380,10 @@
         <div class="toolbar">
           <input id="search" type="search" placeholder="Search domain..." />
           <button id="load-auto" type="button">Load Auto</button>
+          <label class="toggle">
+            <input id="filter-2y" type="checkbox" />
+            is_2_years only
+          </label>
           <!-- <label>
             Load folder
             <input id="folder" type="file" webkitdirectory directory multiple />
@@ -465,6 +473,7 @@
         filtered: [],
         page: 1,
         query: '',
+        only2y: false,
       };
       const ageCache = new Map();
 
@@ -475,6 +484,7 @@
       const prevBtn = document.getElementById('prev');
       const nextBtn = document.getElementById('next');
       const loadAutoBtn = document.getElementById('load-auto');
+      const filter2yEl = document.getElementById('filter-2y');
       const folderInput = document.getElementById('folder');
       const modalEl = document.getElementById('modal');
       const modalTitleEl = document.getElementById('modal-title');
@@ -489,6 +499,12 @@
         return s === 'true' || s === '1' || s === 'yes' || s === 'available';
       }
 
+      function parseTri(value) {
+        const s = String(value || '').trim();
+        if (!s) return null;
+        return truthy(s);
+      }
+
       function parseCsv(text) {
         const lines = text.split(/\r?\n/).filter(Boolean);
         if (lines.length <= 1) return [];
@@ -497,8 +513,9 @@
           const parts = lines[i].split(',');
           const domain = (parts[0] || '').trim();
           if (!domain) continue;
-          const available = truthy(parts[1]);
-          rows.push({ domain, available });
+          const available = parseTri(parts[1]);
+          const is2y = parseTri(parts[2]);
+          rows.push({ domain, available, is2y });
         }
         return rows;
       }
@@ -509,12 +526,14 @@
           if (!map.has(row.domain)) {
             map.set(row.domain, {
               available: row.available,
+              is2y: row.is2y,
             });
             return;
           }
           const prev = map.get(row.domain);
           map.set(row.domain, {
-            available: prev.available || row.available,
+            available: prev.available ?? row.available,
+            is2y: prev.is2y === true || row.is2y === true ? true : prev.is2y ?? row.is2y,
           });
         });
 
@@ -522,6 +541,7 @@
           .map(([domain, data]) => ({
             domain,
             available: data.available,
+            is2y: data.is2y,
           }))
           .sort((a, b) => a.domain.localeCompare(b.domain));
       }
@@ -534,16 +554,14 @@
 
       function applySearch() {
         const q = state.query.trim().toLowerCase();
-        if (!q) {
-          state.filtered = [...state.rows];
-        } else {
-          const qNorm = normalizeDomain(q);
-          state.filtered = state.rows.filter((row) => {
-            const domainLower = row.domain.toLowerCase();
-            if (domainLower.includes(q)) return true;
-            return normalizeDomain(domainLower).includes(qNorm);
-          });
-        }
+        const qNorm = normalizeDomain(q);
+        state.filtered = state.rows.filter((row) => {
+          if (state.only2y && row.is2y !== true) return false;
+          if (!q) return true;
+          const domainLower = row.domain.toLowerCase();
+          if (domainLower.includes(q)) return true;
+          return normalizeDomain(domainLower).includes(qNorm);
+        });
         state.page = 1;
         render();
       }
@@ -562,14 +580,20 @@
         const bodyRows = rows
           .map((row, idx) => {
             const number = (state.page - 1) * PAGE_SIZE + idx + 1;
-            const badgeClass = row.available ? 'yes' : 'no';
-            const badgeText = row.available ? 'Yes' : 'No';
+            const badgeClass =
+              row.available === null ? 'unknown' : row.available ? 'yes' : 'no';
+            const badgeText =
+              row.available === null ? 'N/A' : row.available ? 'Yes' : 'No';
+            const is2yClass =
+              row.is2y === null ? 'unknown' : row.is2y ? 'yes' : 'no';
+            const is2yText =
+              row.is2y === null ? 'N/A' : row.is2y ? 'Yes' : 'No';
             return `
           <tr class="row-anim">
             <td>${number}</td>
             <td>${row.domain}</td>
             <td><span class="badge ${badgeClass}">${badgeText}</span></td>
-            <td><button class="check-btn" data-domain="${row.domain}">Check 2 years</button></td>
+            <td><span class="badge ${is2yClass}">${is2yText}</span></td>
           </tr>
         `;
           })
@@ -582,7 +606,7 @@
               <th>#</th>
               <th>Domain</th>
               <th>Available</th>
-              <th>Age</th>
+              <th>is_2_years</th>
             </tr>
           </thead>
           <tbody>
@@ -787,6 +811,13 @@
         state.query = event.target.value || '';
         applySearch();
       });
+
+      if (filter2yEl) {
+        filter2yEl.addEventListener('change', (event) => {
+          state.only2y = Boolean(event.target.checked);
+          applySearch();
+        });
+      }
 
       prevBtn.addEventListener('click', () => {
         state.page = Math.max(1, state.page - 1);
